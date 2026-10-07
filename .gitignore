@@ -1,0 +1,17 @@
+# Entorno Virtual
+venv/
+ENV/
+env/
+
+# Archivos de datos pesados y temporales
+data/*.wav
+data/*.flac
+data/*.png
+*.npy
+*.pth
+
+# Caché de Python y VS Code
+__pycache__/
+*.pyc
+.vscode/
+.DS_Store
