@@ -9,49 +9,42 @@ from sklearn.metrics import roc_curve
 from scipy.optimize import brentq
 from scipy.interpolate import interp1d
 
-# Asegurar la raíz del proyecto en sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.data_prep.dataset_loader import ASVspoofCymaticDataset
 from src.models.vision_detector import AntiSpoofingResNet
 
 def compute_min_dcf(labels, bonafide_scores, p_spf=0.05, c_miss=1.0, c_fa=10.0):
-    """
-    Calcula el min DCF oficial para ASVspoof 5 Track 1.
-    p_spf=0.05, c_miss=1, c_fa=10 -> beta ~ 1.90
-    """
-    fpr, tpr, thresholds = roc_curve(labels, bonafide_scores, pos_label=0) # pos_label=0 es bonafide
-    fnr = 1.0 - tpr  # P_miss (falsos rechazos de bonafide)
-    
+    """Calcula el min DCF oficial para ASVspoof 5 Track 1."""
+    fpr, tpr, _ = roc_curve(labels, bonafide_scores, pos_label=0)
+    fnr = 1.0 - tpr
     beta = (c_miss / c_fa) * ((1.0 - p_spf) / p_spf)
     dcf = beta * fnr + fpr
-    
-    # Normalización predeterminada de ASVspoof
     dcf_norm = dcf / min(beta, 1.0)
     return np.min(dcf_norm)
 
 def create_asvspoof5_manifest(protocol_path: str, output_csv_path: str) -> str:
-    """Parsea el archivo de metadatos oficial de ASVspoof 5."""
+    """Parsea ASVspoof5.dev.track_1.tsv (10 columnas separadas por espacio)."""
     data = []
     with open(protocol_path, 'r', encoding='utf-8') as f:
         for line in f:
             parts = line.strip().split()
-            if len(parts) >= 2:
+            if len(parts) >= 9:
                 filename = parts[1] if parts[1].endswith('.flac') else f"{parts[1]}.flac"
-                label_str = parts[-1].lower()
-                if label_str in ['spoof', 'bonafide']:
-                    label = 1 if label_str == 'spoof' else 0
+                key = parts[8].lower()
+                if key in ['spoof', 'bonafide']:
+                    label = 1 if key == 'spoof' else 0
                     data.append([filename, label])
 
     os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
     df = pd.DataFrame(data, columns=["filename", "label"])
     df.to_csv(output_csv_path, index=False)
-    print(f"Manifiesto ASVspoof 5 generado con {len(df)} entradas.")
+    print(f"Manifiesto ASVspoof 5 creado con {len(df)} audios.")
     return output_csv_path
 
 def evaluate_asvspoof5(manifest_path: str, audio_dir: str, model_path: str):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"⚡ Evaluando ASVspoof 5 (Track 1) en dispositivo: {device}")
+    print(f"Dispositivo de evaluación: {device}")
 
     dataset = ASVspoofCymaticDataset(manifest_path=manifest_path, audio_dir=audio_dir)
     loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=2)
@@ -63,7 +56,7 @@ def evaluate_asvspoof5(manifest_path: str, audio_dir: str, model_path: str):
     all_labels = []
     bonafide_scores = []
 
-    print("\nInferencia sobre ASVspoof 5 con capa GIF")
+    print("\n Ejecutando inferencia sobre ASVspoof 5 Dev Track 1...")
     with torch.no_grad():
         for i, (tensors, labels) in enumerate(loader):
             tensors = tensors.to(device)
@@ -79,24 +72,19 @@ def evaluate_asvspoof5(manifest_path: str, audio_dir: str, model_path: str):
             if (i + 1) % 100 == 0:
                 print(f"Procesados {i+1}/{len(loader)} lotes...")
 
-    # 1. Cálculo de EER
-    fpr, tpr, _ = roc_curve(all_labels, bonafide_scores, pos_label=0)
-    eer = brentq(lambda x: 1. - x - interp1d(fpr, tpr)(x), 0., 1.)
-
-    # 2. Cálculo de min DCF oficial (ASVspoof 5)
+    eer = brentq(lambda x: 1. - x - interp1d(*roc_curve(all_labels, bonafide_scores, pos_label=0)[:2])(x), 0., 1.)
     min_dcf = compute_min_dcf(np.array(all_labels), np.array(bonafide_scores))
 
     print(f"\n==========================================")
-    print(f"RESULTADOS ASVSPOOF 5 TRACK 1 (MODELO V2 GIF):")
+    print(f"RESULTADOS EVALUACIÓN ASVSPOOF 5 (TRACK 1):")
     print(f"   • Equal Error Rate (EER):  {eer * 100:.4f}%")
     print(f"   • Minimum DCF (min DCF):   {min_dcf:.4f}")
     print(f"==========================================")
 
 if __name__ == "__main__":
     project_root = os.path.dirname(os.path.abspath(__file__))
-    
-    protocol_file = sys.argv[1] if len(sys.argv) > 1 else "/kaggle/input/asvspoof5-bucket/ASVspoof5.dev.metadata.txt"
-    audio_dir = sys.argv[2] if len(sys.argv) > 2 else "/kaggle/input/asvspoof5-bucket/flac"
+    protocol_file = sys.argv[1] if len(sys.argv) > 1 else "/kaggle/working/ASVspoof5.dev.track_1.tsv"
+    audio_dir = sys.argv[2] if len(sys.argv) > 2 else "/kaggle/working/flac_D"
     checkpoint = "/kaggle/working/models_checkpoints/antispoofing_resnet_v2_glottal.pth"
     
     manifest_file = os.path.join(project_root, "data/asvspoof5_manifest.csv")
